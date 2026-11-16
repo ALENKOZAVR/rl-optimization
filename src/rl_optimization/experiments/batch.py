@@ -33,6 +33,7 @@ def _canonical_algorithm_name(algorithm: str) -> str:
         "de_current_to_best_1": "current_to_best_1",
         "random_de": "random_de",
         "rl_de_q_learning": "rl_de_q_learning",
+        "rl_de_q_learning_stagnation": "rl_de_q_learning_stagnation",
     }
     return mapping.get(algorithm, algorithm)
 
@@ -101,11 +102,11 @@ def _is_complete_run_file(
 
         algo = expected_algorithm
         strategy_history = result.get("strategy_history")
-        if algo in {"random_de", "rl_de_q_learning"}:
+        if algo in {"random_de", "rl_de_q_learning", "rl_de_q_learning_stagnation"}:
             if not isinstance(strategy_history, list) or len(strategy_history) != expected_generations:
                 return False
 
-        if algo == "rl_de_q_learning":
+        if algo in {"rl_de_q_learning", "rl_de_q_learning_stagnation"}:
             rl_history = result.get("rl_history")
             if not isinstance(rl_history, list):
                 return False
@@ -170,6 +171,7 @@ def run_batch_comparison(
     max_fes = int(_parse_param(de_cfg, "max_fes").value)
     generations = int(_parse_param(de_cfg, "generations").value)
     base_seed = int(_parse_param(exp_cfg, "base_seed").value)
+    state_order: list[str] = []
 
     skipped_completed_runs = 0
     executed_runs = 0
@@ -234,6 +236,10 @@ def run_batch_comparison(
                 if rl_history is not None:
                     rl_histories_all.append(rl_history)
                     rl_histories_by_function[function_name].append(rl_history)
+                    for step in rl_history:
+                        state = str(step["state"])
+                        if state not in state_order:
+                            state_order.append(state)
 
             per_function_results[function_name][algo_name] = best_values
 
@@ -263,17 +269,18 @@ def run_batch_comparison(
                 }
             )
 
+    states_for_frequency = tuple(state_order) if state_order else ("early", "middle", "late")
     rl_stage_freq_ratio = compute_strategy_stage_frequencies_complete(
-        rl_histories_all, as_percent=False
+        rl_histories_all, as_percent=False, states=states_for_frequency
     )
     rl_stage_freq_percent = compute_strategy_stage_frequencies_complete(
-        rl_histories_all, as_percent=True
+        rl_histories_all, as_percent=True, states=states_for_frequency
     )
 
     rl_stage_freq_by_function: dict[str, dict[str, dict[str, float]]] = {}
     for function_name, histories in rl_histories_by_function.items():
         rl_stage_freq_by_function[function_name] = compute_strategy_stage_frequencies_complete(
-            histories, as_percent=False
+            histories, as_percent=False, states=states_for_frequency
         )
 
     summary_json = {

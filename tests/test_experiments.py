@@ -250,3 +250,53 @@ def test_run_comparison_does_not_overwrite_previous_results(tmp_path: Path) -> N
     assert out1["output_path"] != out2["output_path"]
     assert Path(out1["output_path"]).exists()
     assert Path(out2["output_path"]).exists()
+
+
+def test_load_experiment_config_rejects_missing_stagnation_threshold_for_stagnation_state(
+    tmp_path: Path,
+) -> None:
+    cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    cfg["rl"]["state_definition"]["value"] = "budget_ratio_thirds_with_stagnation"
+    cfg["rl"].pop("stagnation_threshold", None)
+    path = tmp_path / "missing_stagnation_threshold.yaml"
+    path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_experiment_config(path)
+
+
+def test_run_comparison_supports_rl_de_stagnation_algorithm(tmp_path: Path) -> None:
+    cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    cfg["task"]["dimension"]["value"] = 10
+    cfg["de"]["population_size"]["value"] = 50
+    cfg["de"]["max_fes"]["value"] = 10000
+    cfg["de"]["generations"]["value"] = 200
+    cfg["rl"]["state_definition"]["value"] = "budget_ratio_thirds_with_stagnation"
+    cfg["rl"]["stagnation_threshold"] = {"value": 5, "source": "assumption"}
+    cfg_path = tmp_path / "stagnation_cfg.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
+
+    out = run_comparison_experiment(
+        config_path=cfg_path,
+        algorithm="rl_de_q_learning_stagnation",
+        function_name="sphere",
+        repeats=1,
+        output_dir=tmp_path,
+        debug=False,
+    )
+    data = json.loads(Path(out["output_path"]).read_text(encoding="utf-8"))
+    run0 = data["runs"][0]
+    assert data["metadata"]["algorithm"] == "rl_de_q_learning_stagnation"
+    assert run0["result"]["function_evaluations"] == 10000
+    assert len(run0["result"]["rl_history"]) == 199
+
+
+def test_run_comparison_rejects_stagnation_algorithm_with_v1_state_definition(tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        run_comparison_experiment(
+            config_path=CONFIG_PATH,
+            algorithm="rl_de_q_learning_stagnation",
+            function_name="sphere",
+            repeats=1,
+            output_dir=tmp_path,
+            debug=False,
+        )

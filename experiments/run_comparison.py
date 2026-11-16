@@ -12,7 +12,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--algorithm",
         required=True,
-        choices=["de_rand_1", "de_best_1", "de_current_to_best_1", "random_de", "rl_de_q_learning"],
+        choices=[
+            "de_rand_1",
+            "de_best_1",
+            "de_current_to_best_1",
+            "random_de",
+            "rl_de_q_learning",
+            "rl_de_q_learning_stagnation",
+        ],
     )
     parser.add_argument(
         "--function",

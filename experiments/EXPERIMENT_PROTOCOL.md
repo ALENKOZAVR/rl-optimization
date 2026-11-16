@@ -46,6 +46,7 @@
 - проверочный: [rl_de_comparison_check.yaml](./configs/rl_de_comparison_check.yaml)
 - пилот 10D (3 повтора): [rl_de_comparison_pilot_10d.yaml](./configs/rl_de_comparison_pilot_10d.yaml)
 - основной 10D (30 повторов): [rl_de_comparison_main_10d_30runs.yaml](./configs/rl_de_comparison_main_10d_30runs.yaml)
+- RL-DE v2 (стагнация, 10D, 30 повторов): [rl_de_stagnation_v2_10d_30runs.yaml](./configs/rl_de_stagnation_v2_10d_30runs.yaml)
 - основной шаблон: [rl_de_comparison_main_template.yaml](./configs/rl_de_comparison_main_template.yaml)
 
 Для каждого параметра указан `source`:

@@ -11,6 +11,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default="experiments/configs/rl_de_comparison_check.yaml")
     parser.add_argument("--repeats", type=int, default=None)
     parser.add_argument("--output-dir", default="results_comparison_batch")
+    parser.add_argument("--algorithms", nargs="+", default=None)
+    parser.add_argument("--functions", nargs="+", default=None)
     parser.add_argument("--batch-name", default=None)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--debug", action="store_true")
@@ -23,6 +25,8 @@ def main() -> None:
         config_path=args.config,
         repeats=args.repeats,
         output_dir=args.output_dir,
+        algorithms=args.algorithms,
+        functions=args.functions,
         batch_name=args.batch_name,
         resume=args.resume,
         debug=args.debug,

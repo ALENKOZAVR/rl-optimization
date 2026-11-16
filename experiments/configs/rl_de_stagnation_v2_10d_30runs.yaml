@@ -1,0 +1,107 @@
+task:
+  function_name:
+    value: sphere
+    source: assumption
+  dimension:
+    value: 10
+    source: assumption
+  bounds_by_function:
+    value:
+      sphere: [-5.12, 5.12]
+      ackley: [-32.768, 32.768]
+      rastrigin: [-5.12, 5.12]
+      rosenbrock: [-5, 10]
+      schwefel: [-500, 500]
+    source: assumption
+  minimization:
+    value: true
+    source: article
+
+de:
+  population_size:
+    value: 50
+    source: assumption
+  F:
+    value: 0.5
+    source: existing_implementation
+  CR:
+    value: 0.9
+    source: existing_implementation
+  max_fes:
+    value: 10000
+    source: assumption
+  generations:
+    value: 200
+    source: assumption
+  crossover:
+    value: binomial
+    source: existing_implementation
+  boundary_handling:
+    value: clip_to_bounds
+    source: existing_implementation
+  elitism:
+    value: true
+    source: existing_implementation
+
+rl:
+  method:
+    value: q_learning
+    source: article
+  alpha:
+    value: 0.1
+    source: existing_implementation
+  gamma:
+    value: 0.9
+    source: existing_implementation
+  epsilon:
+    value: 0.1
+    source: existing_implementation
+  q_init:
+    value: zeros
+    source: existing_implementation
+  state_definition:
+    value: budget_ratio_thirds_with_stagnation
+    source: assumption
+  stagnation_threshold:
+    value: 5
+    source: assumption
+  actions:
+    value: [rand_1, best_1, current_to_best_1]
+    source: article
+  action_frequency:
+    value: one_action_per_generation
+    source: existing_implementation
+  reward_definition:
+    value: strict_improvement_ratio_per_generation
+    source: existing_implementation
+  terminal_update_rule:
+    value: done_true_on_last_generation_transition
+    source: existing_implementation
+  reset_q_each_run:
+    value: true
+    source: existing_implementation
+
+experiment:
+  independent_runs:
+    value: 30
+    source: article
+  base_seed:
+    value: 42
+    source: existing_implementation
+  seed_rule:
+    value: seed_i = base_seed + run_index
+    source: assumption
+  metrics:
+    value: [best_value, mean, std, min, max, mean_rank]
+    source: article
+  std_ddof:
+    value: 1
+    source: assumption
+  ranking_rule:
+    value: ascending_minimization_with_average_rank_for_ties
+    source: assumption
+
+notes:
+  v2_goal:
+    value: "RL-DE v2: состояние = стадия поиска + признак стагнации."
+    source: assumption

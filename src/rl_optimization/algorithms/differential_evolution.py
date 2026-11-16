@@ -40,6 +40,17 @@ SUPPORTED_MUTATION_ALIASES: dict[str, str] = {
     "de/random/bin": "random_de",
 }
 RANDOM_DE_STRATEGIES: tuple[str, str, str] = ("rand_1", "best_1", "current_to_best_1")
+RL_STATE_DEFINITION_BUDGET_THIRDS = "budget_ratio_thirds"
+RL_STATE_DEFINITION_BUDGET_THIRDS_WITH_STAGNATION = "budget_ratio_thirds_with_stagnation"
+RL_V1_STATES: tuple[str, str, str] = ("early", "middle", "late")
+RL_V2_STATES: tuple[str, ...] = (
+    "early_improving",
+    "early_stagnating",
+    "middle_improving",
+    "middle_stagnating",
+    "late_improving",
+    "late_stagnating",
+)
 StrategySelector = Callable[[int, Sequence[str]], str]
 
 
@@ -74,6 +85,8 @@ class RLConfig:
     epsilon: float = 0.1
     seed: int = 42
     carry_learning: bool = False
+    state_definition: str = RL_STATE_DEFINITION_BUDGET_THIRDS
+    stagnation_threshold: int = 5
 
 
 @dataclass
@@ -188,6 +201,69 @@ def budget_state_from_calls(used_calls: int, total_budget_calls: int) -> str:
     if ratio < (2.0 / 3.0):
         return "middle"
     return "late"
+
+
+def stagnation_flag_from_counter(
+    stagnation_counter: int,
+    stagnation_threshold: int,
+) -> str:
+    if stagnation_threshold <= 0:
+        raise ValueError("stagnation_threshold must be > 0")
+    if stagnation_counter < 0:
+        raise ValueError("stagnation_counter must be >= 0")
+    if stagnation_counter < stagnation_threshold:
+        return "improving"
+    return "stagnating"
+
+
+def encode_rl_state(
+    used_calls: int,
+    total_budget_calls: int,
+    state_definition: str,
+    stagnation_counter: int = 0,
+    stagnation_threshold: int = 5,
+) -> str:
+    stage = budget_state_from_calls(used_calls, total_budget_calls)
+    normalized_definition = state_definition.strip().lower()
+    if normalized_definition == RL_STATE_DEFINITION_BUDGET_THIRDS:
+        return stage
+    if normalized_definition == RL_STATE_DEFINITION_BUDGET_THIRDS_WITH_STAGNATION:
+        flag = stagnation_flag_from_counter(stagnation_counter, stagnation_threshold)
+        return f"{stage}_{flag}"
+    raise ValueError(
+        f"Unsupported state_definition '{state_definition}'. "
+        f"Use '{RL_STATE_DEFINITION_BUDGET_THIRDS}' or "
+        f"'{RL_STATE_DEFINITION_BUDGET_THIRDS_WITH_STAGNATION}'."
+    )
+
+
+def rl_states_for_definition(state_definition: str) -> tuple[str, ...]:
+    normalized_definition = state_definition.strip().lower()
+    if normalized_definition == RL_STATE_DEFINITION_BUDGET_THIRDS:
+        return RL_V1_STATES
+    if normalized_definition == RL_STATE_DEFINITION_BUDGET_THIRDS_WITH_STAGNATION:
+        return RL_V2_STATES
+    raise ValueError(
+        f"Unsupported state_definition '{state_definition}'. "
+        f"Use '{RL_STATE_DEFINITION_BUDGET_THIRDS}' or "
+        f"'{RL_STATE_DEFINITION_BUDGET_THIRDS_WITH_STAGNATION}'."
+    )
+
+
+def update_stagnation_counter(
+    current_counter: int,
+    best_value_before: float,
+    best_value_after: float,
+    minimization: bool,
+) -> int:
+    if current_counter < 0:
+        raise ValueError("current_counter must be >= 0")
+    strict_improvement = (
+        (best_value_after < best_value_before)
+        if minimization
+        else (best_value_after > best_value_before)
+    )
+    return 0 if strict_improvement else current_counter + 1
 
 
 def strict_improvement_reward_from_internal_fitness(
@@ -459,19 +535,39 @@ class RLDifferentialEvolution(TracingDifferentialEvolution):
         self,
         *args: Any,
         rl_agent: QLearningAgent,
+        state_definition: str = RL_STATE_DEFINITION_BUDGET_THIRDS,
+        stagnation_threshold: int = 5,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self._rl_agent = rl_agent
+        self._state_definition = state_definition.strip().lower()
+        self._stagnation_threshold = int(stagnation_threshold)
+        if self._stagnation_threshold <= 0:
+            raise ValueError("stagnation_threshold must be > 0")
+        # Validate state definition early.
+        rl_states_for_definition(self._state_definition)
         self.strategy_history_transitions: list[str] = []
         self.rl_history_transitions: list[dict[str, Any]] = []
         self.q_update_debug_trace: dict[str, Any] | None = None
         self._total_budget_calls = int(self._pop_size * self._iters)
+        self._stagnation_counter = 0
+
+    def _best_value_from_internal_fitness(self, internal_fitness: NDArray[np.float64]) -> float:
+        return float(self._sign * np.max(internal_fitness))
 
     def _get_new_population(self) -> None:
         self._transition_index += 1
 
-        current_state = budget_state_from_calls(self._calls, self._total_budget_calls)
+        stage_before = budget_state_from_calls(self._calls, self._total_budget_calls)
+        stagnation_counter_before = int(self._stagnation_counter)
+        current_state = encode_rl_state(
+            used_calls=self._calls,
+            total_budget_calls=self._total_budget_calls,
+            state_definition=self._state_definition,
+            stagnation_counter=stagnation_counter_before,
+            stagnation_threshold=self._stagnation_threshold,
+        )
         chosen_strategy = self._rl_agent.select_action(current_state)
         chosen_strategy = normalize_mutation_strategy(chosen_strategy)
         if chosen_strategy not in RANDOM_DE_STRATEGIES:
@@ -482,6 +578,7 @@ class RLDifferentialEvolution(TracingDifferentialEvolution):
         self.strategy_history_transitions.append(chosen_strategy)
 
         target_fitness_before = self._fitness_i.copy()
+        best_value_before = self._best_value_from_internal_fitness(target_fitness_before)
         population_before_mutation = self._population_g_i.copy()
 
         trial_population = np.empty_like(self._population_g_i, dtype=np.float64)
@@ -506,8 +603,23 @@ class RLDifferentialEvolution(TracingDifferentialEvolution):
         self._population_ph_i[mask] = trial_population_ph[mask]
         self._fitness_i[mask] = trial_fitness[mask]
 
+        best_value_after = self._best_value_from_internal_fitness(self._fitness_i)
+        stagnation_counter_after = update_stagnation_counter(
+            current_counter=stagnation_counter_before,
+            best_value_before=best_value_before,
+            best_value_after=best_value_after,
+            minimization=(self._sign == -1),
+        )
+        self._stagnation_counter = int(stagnation_counter_after)
+
         is_terminal = self._transition_index == (self._iters - 1)
-        next_state = budget_state_from_calls(self._calls, self._total_budget_calls)
+        next_state = encode_rl_state(
+            used_calls=self._calls,
+            total_budget_calls=self._total_budget_calls,
+            state_definition=self._state_definition,
+            stagnation_counter=stagnation_counter_after,
+            stagnation_threshold=self._stagnation_threshold,
+        )
         q_update_trace = self._rl_agent.update(
             state=current_state,
             action=chosen_strategy,
@@ -525,11 +637,16 @@ class RLDifferentialEvolution(TracingDifferentialEvolution):
         self.rl_history_transitions.append(
             {
                 "generation_transition": int(self._transition_index),
+                "stage": stage_before,
+                "stagnation_counter_before": stagnation_counter_before,
                 "state": current_state,
                 "action": chosen_strategy,
                 "reward": float(reward),
                 "successful_replacements": int(successful_replacements),
                 "budget_calls_used": int(self._calls),
+                "best_value_before_generation": best_value_before,
+                "best_value_after_generation": best_value_after,
+                "stagnation_counter_after": stagnation_counter_after,
                 "next_state": next_state,
                 "done": bool(is_terminal),
                 "q_table_after_update": self._rl_agent.get_q_table().tolist(),
@@ -794,10 +911,11 @@ def run_rl_differential_evolution(
 
     debug_config = debug_config or DEDebugConfig(enabled=False)
     normalized_objective_mode = normalize_objective_mode(config.objective_mode)
+    rl_states = rl_states_for_definition(rl_config.state_definition)
 
     if agent is None:
         q_agent = QLearningAgent(
-            states=("early", "middle", "late"),
+            states=rl_states,
             actions=RANDOM_DE_STRATEGIES,
             alpha=rl_config.alpha,
             gamma=rl_config.gamma,
@@ -806,6 +924,11 @@ def run_rl_differential_evolution(
         )
     else:
         q_agent = agent
+        if tuple(q_agent.states) != tuple(rl_states):
+            raise ValueError(
+                "Provided QLearningAgent states do not match rl_config.state_definition. "
+                f"Expected {rl_states}, got {q_agent.states}."
+            )
         q_agent.set_epsilon(rl_config.epsilon)
         if not rl_config.carry_learning:
             q_agent.reset(reset_rng=True)
@@ -834,6 +957,8 @@ def run_rl_differential_evolution(
         on_generation=_on_generation,
         debug_config=debug_config,
         rl_agent=q_agent,
+        state_definition=rl_config.state_definition,
+        stagnation_threshold=rl_config.stagnation_threshold,
     )
     optimizer.fit()
 

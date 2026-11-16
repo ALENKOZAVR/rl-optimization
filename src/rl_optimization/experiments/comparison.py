@@ -12,6 +12,8 @@ import yaml
 
 from rl_optimization.algorithms.differential_evolution import DEConfig
 from rl_optimization.algorithms.differential_evolution import DEDebugConfig
+from rl_optimization.algorithms.differential_evolution import RL_STATE_DEFINITION_BUDGET_THIRDS
+from rl_optimization.algorithms.differential_evolution import RL_STATE_DEFINITION_BUDGET_THIRDS_WITH_STAGNATION
 from rl_optimization.algorithms.differential_evolution import RLConfig
 from rl_optimization.algorithms.differential_evolution import run_differential_evolution
 from rl_optimization.algorithms.differential_evolution import run_rl_differential_evolution
@@ -22,7 +24,10 @@ VALID_SOURCES = {"article", "existing_implementation", "assumption"}
 SUPPORTED_CROSSOVERS = {"binomial"}
 SUPPORTED_BOUNDARY_HANDLING = {"clip_to_bounds"}
 SUPPORTED_ACTIONS = {"rand_1", "best_1", "current_to_best_1"}
-SUPPORTED_STATE_DEFINITIONS = {"budget_ratio_thirds"}
+SUPPORTED_STATE_DEFINITIONS = {
+    RL_STATE_DEFINITION_BUDGET_THIRDS,
+    RL_STATE_DEFINITION_BUDGET_THIRDS_WITH_STAGNATION,
+}
 SUPPORTED_REWARD_DEFINITIONS = {"strict_improvement_ratio_per_generation"}
 SUPPORTED_ACTION_FREQUENCY = {"one_action_per_generation"}
 SUPPORTED_TERMINAL_UPDATE = {"done_true_on_last_generation_transition"}
@@ -34,6 +39,7 @@ ALGORITHM_ALIASES = {
     "de_current_to_best_1": "current_to_best_1",
     "random_de": "random_de",
     "rl_de_q_learning": "rl_de_q_learning",
+    "rl_de_q_learning_stagnation": "rl_de_q_learning_stagnation",
 }
 
 
@@ -53,6 +59,12 @@ def _parse_param(config: dict[str, Any], key: str) -> ParamWithSource:
     if source not in VALID_SOURCES:
         raise ValueError(f"Config key '{key}' has invalid source '{source}'")
     return ParamWithSource(value=raw["value"], source=source)
+
+
+def _parse_optional_param(config: dict[str, Any], key: str) -> ParamWithSource | None:
+    if key not in config:
+        return None
+    return _parse_param(config, key)
 
 
 def load_experiment_config(path: str | Path) -> dict[str, Any]:
@@ -181,6 +193,18 @@ def load_experiment_config(path: str | Path) -> dict[str, Any]:
     if not isinstance(_parse_param(rl, "reset_q_each_run").value, bool):
         raise ValueError("rl.reset_q_each_run must be bool")
 
+    state_definition = str(_parse_param(rl, "state_definition").value)
+    stag_param = _parse_optional_param(rl, "stagnation_threshold")
+    if stag_param is not None:
+        stagnation_threshold = int(stag_param.value)
+        if stagnation_threshold <= 0:
+            raise ValueError("rl.stagnation_threshold must be > 0")
+    if state_definition == RL_STATE_DEFINITION_BUDGET_THIRDS_WITH_STAGNATION and stag_param is None:
+        raise ValueError(
+            "rl.stagnation_threshold must be provided for "
+            "state_definition='budget_ratio_thirds_with_stagnation'"
+        )
+
     experiment = data["experiment"]
     for key in (
         "independent_runs",
@@ -234,7 +258,14 @@ def run_comparison_experiment(
     if repeats_to_use < 1:
         raise ValueError("repeats must be >= 1")
     algo = ALGORITHM_ALIASES.get(algorithm, algorithm)
-    if algo not in {"rand_1", "best_1", "current_to_best_1", "random_de", "rl_de_q_learning"}:
+    if algo not in {
+        "rand_1",
+        "best_1",
+        "current_to_best_1",
+        "random_de",
+        "rl_de_q_learning",
+        "rl_de_q_learning_stagnation",
+    }:
         raise ValueError(f"Unsupported algorithm '{algorithm}'")
     if function_name not in BENCHMARK_FUNCTIONS:
         raise ValueError(f"Unknown function '{function_name}'")
@@ -263,6 +294,13 @@ def run_comparison_experiment(
     rl_alpha = float(_parse_param(rl_cfg, "alpha").value)
     rl_gamma = float(_parse_param(rl_cfg, "gamma").value)
     rl_epsilon = float(_parse_param(rl_cfg, "epsilon").value)
+    rl_state_definition = str(_parse_param(rl_cfg, "state_definition").value)
+    rl_stagnation_threshold_param = _parse_optional_param(rl_cfg, "stagnation_threshold")
+    rl_stagnation_threshold = (
+        int(rl_stagnation_threshold_param.value)
+        if rl_stagnation_threshold_param is not None
+        else 5
+    )
     reset_q_each_run = bool(_parse_param(rl_cfg, "reset_q_each_run").value)
 
     base_seed = int(_parse_param(exp_cfg, "base_seed").value)
@@ -276,10 +314,26 @@ def run_comparison_experiment(
     benchmark_fn = BENCHMARK_FUNCTIONS[function_name]
     debug_cfg = DEDebugConfig(enabled=debug, generation_to_trace=1, individual_index_to_trace=0)
 
-    if algo == "rl_de_q_learning" and enforce_reset_q_each_run_for_comparison and not reset_q_each_run:
+    if (
+        algo in {"rl_de_q_learning", "rl_de_q_learning_stagnation"}
+        and enforce_reset_q_each_run_for_comparison
+        and not reset_q_each_run
+    ):
         raise ValueError(
             "For comparison mode, rl.reset_q_each_run must be true. "
             "Use a separate experiment type for transfer learning."
+        )
+    if algo == "rl_de_q_learning" and rl_state_definition != RL_STATE_DEFINITION_BUDGET_THIRDS:
+        raise ValueError(
+            "Algorithm 'rl_de_q_learning' requires rl.state_definition='budget_ratio_thirds'."
+        )
+    if (
+        algo == "rl_de_q_learning_stagnation"
+        and rl_state_definition != RL_STATE_DEFINITION_BUDGET_THIRDS_WITH_STAGNATION
+    ):
+        raise ValueError(
+            "Algorithm 'rl_de_q_learning_stagnation' requires "
+            "rl.state_definition='budget_ratio_thirds_with_stagnation'."
         )
 
     runs_data: list[dict[str, Any]] = []
@@ -295,20 +349,22 @@ def run_comparison_experiment(
             CR=cr,
             iters=iters,
             seed=optimizer_seed,
-            mutation="rand_1" if algo == "rl_de_q_learning" else algo,
+            mutation="rand_1" if algo in {"rl_de_q_learning", "rl_de_q_learning_stagnation"} else algo,
             objective_mode="population",
             minimization=minimization,
             elitism=elitism,
             strategy_random_seed=optimizer_seed + 10_000,
         )
 
-        if algo == "rl_de_q_learning":
+        if algo in {"rl_de_q_learning", "rl_de_q_learning_stagnation"}:
             rl_config = RLConfig(
                 alpha=rl_alpha,
                 gamma=rl_gamma,
                 epsilon=rl_epsilon,
                 seed=base_seed + run_index,
                 carry_learning=not reset_q_each_run,
+                state_definition=rl_state_definition,
+                stagnation_threshold=rl_stagnation_threshold,
             )
             result = run_rl_differential_evolution(
                 objective=benchmark_fn,

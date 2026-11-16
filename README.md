@@ -9,6 +9,7 @@
 3. `current_to_best_1` (`DE/current-to-best/1/bin`)
 4. `random_de` (случайный выбор стратегии по поколениям)
 5. `rl_de_q_learning` (Q-learning выбирает стратегию по состоянию поиска)
+6. `rl_de_q_learning_stagnation` (Q-learning с состоянием "стадия + стагнация")
 
 ## Важная зависимость: thefittest
 
@@ -26,6 +27,9 @@
   - состояния: `early`, `middle`, `late` (по доле использованного бюджета),
   - действия: `rand_1`, `best_1`, `current_to_best_1`,
   - награда: доля строгих улучшений в поколении.
+- RL-DE v2 (экспериментальный вариант):
+  - состояния: `early/middle/late` × `improving/stagnating`,
+  - настраиваемый порог стагнации `stagnation_threshold` в YAML.
 - Набор тестовых функций: Sphere, Ackley, Rastrigin, Rosenbrock, Schwefel.
 - Инфраструктура воспроизводимых сравнительных экспериментов:
   - YAML-конфигурации,
@@ -97,6 +101,9 @@ python experiments/run_comparison.py --config experiments/configs/rl_de_comparis
 
 ```bash
 python experiments/batch_run.py --config experiments/configs/rl_de_comparison_check.yaml --repeats 1 --output-dir results_comparison_batch
+
+# RL-DE v2 (30 запусков × 5 функций, подготовка конфигурации)
+python experiments/batch_run.py --config experiments/configs/rl_de_stagnation_v2_10d_30runs.yaml --algorithms rl_de_q_learning_stagnation --output-dir results_rl_de_v2
 ```
 
 ### Анализ результатов пакетного запуска
